@@ -38,32 +38,61 @@ def _ts_proto_library(ctx):
         normalizedProtoName = proto.path.replace(ctx.label.package, "").lstrip("/")[:-len(proto.extension) - 1]
         ts_outputs.append(ctx.actions.declare_file("%s.ts" % (normalizedProtoName)))
 
-    protoc_args = ctx.actions.args()
+    args = ctx.actions.args()
 
-    protoc_args.add("--plugin=protoc-gen-ts=%s" % (ctx.executable.protoc_gen_ts_bin.path))
+    args.add("--plugin=protoc-gen-ts=%s" % (ctx.executable.protoc_gen_ts_bin.path))
 
-    protoc_args.add("--ts_out=%s" % (ctx.bin_dir.path))
+    args.add("--ts_out=%s" % (ctx.bin_dir.path))
 
-    protoc_args.add("--descriptor_set_in=%s" % (":".join([desc.path for desc in transitive_descriptors])))
+    args.add("--descriptor_set_in=%s" % (":".join([desc.path for desc in transitive_descriptors])))
 
-    protoc_args.add_all(direct_sources)
+    args.add_all(direct_sources)
 
-    print(args)
-
-    env = dict()
-
-    env["GRPC_PACKAGE_NAME"] = ctx.attr.grpc_package_name
+    args.add("--ts_opt=grpc_package=%s" % ctx.attr.grpc_package_name)
     
     if ctx.attr.experimental_features:
-        env['EXPERIMENTAL_FEATURES'] = "true"
+        args.add("--ts_opt=unary_rpc_promise")
 
+    args.add_all(direct_sources)
+
+
+    executable = ""
+
+    is_windows_host = ctx.configuration.host_path_separator == ";"
+ 
+
+    if  is_windows_host:
+        executable = ctx.actions.declare_file("_protoc.cmd")
+        ctx.actions.write(
+            executable,
+            content = 
+"""@echo off
+CALL "{protoc}" %*
+""".format(
+                protoc =  ctx.executable._protoc.path,
+            ),
+            is_executable = True,
+        )
+    else:
+        executable = ctx.actions.declare_file("_protoc.sh")
+        ctx.actions.write(
+            executable,
+            content = 
+"""#!/usr/bin/env bash
+set -e
+{protoc} $@
+""".format(
+                protoc = ctx.executable._protoc.path,
+            ),
+            is_executable = True,
+        )
+    
     ctx.actions.run(
         inputs = direct_sources + transitive_descriptors,
-        tools = ctx.files.protoc_gen_ts_bin,
-        executable = ctx.executable._protoc,
+        tools = [ctx.executable.protoc_gen_ts_bin, ctx.executable._protoc],
+        executable = executable,
         outputs = ts_outputs,
-        arguments = [protoc_args],
-        env = env,
+        arguments = [args],
         progress_message = "Generating Protocol Buffers for Typescript %s" % ctx.label,
     )
 
